@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Events - GitHub Stars Release Watcher{% endblock %}
+
+{% block content %}
+<div class="events-page">
+    <h1>Events / Updates</h1>
+
+    <div class="toolbar">
+        <form method="get" action="/events" class="filter-form">
+            <select name="source" class="filter-select">
+                <option value="all" {% if source == 'all' %}selected{% endif %}>All Sources</option>
+                <option value="release" {% if source == 'release' %}selected{% endif %}>Releases</option>
+                <option value="tag" {% if source == 'tag' %}selected{% endif %}>Tags</option>
+            </select>
+            <button type="submit" class="btn btn-primary">Filter</button>
+        </form>
+    </div>
+
+    {% if events %}
+    <div class="table-container">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Repository</th>
+                    <th>Version</th>
+                    <th>Type</th>
+                    <th>Title</th>
+                    <th>Summary Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for event in events %}
+                <tr>
+                    <td class="text-muted">
+                        <small>{{ event.created_at[:16] }}</small>
+                    </td>
+                    <td>
+                        <a href="https://github.com/{{ event.repo_name }}" target="_blank" class="repo-name">
+                            {{ event.repo_name }}
+                        </a>
+                    </td>
+                    <td>
+                        {% if event.html_url %}
+                        <a href="{{ event.html_url }}" target="_blank">
+                            <code>{{ event.version }}</code>
+                        </a>
+                        {% else %}
+                        <code>{{ event.version }}</code>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="badge badge-{{ event.source }}">{{ event.source }}</span>
+                    </td>
+                    <td>
+                        {% if event.release_name %}
+                        <span class="release-name">{{ event.release_name }}</span>
+                        {% endif %}
+                        {% if event.message %}
+                        <div class="event-msg">{{ event.message[:200] }}</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if event.in_summary %}
+                        <span class="badge badge-success">included</span>
+                        {% else %}
+                        <span class="badge badge-muted">pending</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No events found.</p>
+        {% if source != 'all' %}
+        <p><a href="/events">Clear filters</a></p>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

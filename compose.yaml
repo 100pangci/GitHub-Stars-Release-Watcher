@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  watcher:
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: github-stars-release-watcher
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - APP_PASSWORD=${APP_PASSWORD:-change-me}
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      - APP_COOKIE_SECURE=false
+      - GITHUB_USERNAME=${GITHUB_USERNAME:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - CHECK_SCHEDULE=weekly
+      - CHECK_WEEKDAY=mon
+      - CHECK_TIME=09:00
+    restart: unless-stopped
