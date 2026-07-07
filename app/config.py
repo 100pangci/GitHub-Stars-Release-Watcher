@@ -1,5 +1,6 @@
 """Application configuration via pydantic-settings."""
 
+import contextlib
 import secrets
 from pathlib import Path
 
@@ -36,7 +37,8 @@ class AppSettings(BaseSettings):
         if self.database_url.startswith("sqlite:///"):
             path = self.database_url.replace("sqlite:///", "")
             db_dir = Path(path).parent
-            db_dir.mkdir(parents=True, exist_ok=True)
+            with contextlib.suppress(PermissionError):
+                db_dir.mkdir(parents=True, exist_ok=True)
         return self.database_url
 
     def get_session_secret(self) -> str:
