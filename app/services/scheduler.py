@@ -2,28 +2,24 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import TaskRun
-from app.services.logs import add_log
-from app.services.settings import get_setting, set_setting
+from app.services.settings import get_setting
 
 logger = logging.getLogger(__name__)
 
-scheduler: Optional[AsyncIOScheduler] = None
+scheduler: AsyncIOScheduler | None = None
 _running_tasks: dict = {}  # task_name -> bool (lock)
 
 
-async def run_task(task_name: str, task_func, **kwargs):
+async def run_task(task_name: str, task_func, **kwargs) -> dict:
     """Run a background task with concurrency protection and status tracking."""
-    # Check if already running
     if _running_tasks.get(task_name, False):
         logger.warning(f"Task '{task_name}' is already running, skipping")
         db = SessionLocal()
@@ -32,8 +28,8 @@ async def run_task(task_name: str, task_func, **kwargs):
                 task_name=task_name,
                 status="skipped",
                 message="Previous task still running",
-                started_at=datetime.now(timezone.utc),
-                finished_at=datetime.now(timezone.utc),
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
             )
             db.add(run)
             db.commit()
@@ -41,7 +37,7 @@ async def run_task(task_name: str, task_func, **kwargs):
             db.rollback()
         finally:
             db.close()
-        return
+        return {"skipped": True, "message": f"Task '{task_name}' is already running"}
 
     _running_tasks[task_name] = True
     db = SessionLocal()
@@ -50,7 +46,7 @@ async def run_task(task_name: str, task_func, **kwargs):
         task_run = TaskRun(
             task_name=task_name,
             status="running",
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         db.add(task_run)
         db.commit()
@@ -58,20 +54,22 @@ async def run_task(task_name: str, task_func, **kwargs):
 
         result = await task_func(**kwargs)
 
-        # Update run
         task_run.status = "completed"
-        task_run.finished_at = datetime.now(timezone.utc)
+        task_run.finished_at = datetime.now(UTC)
         task_run.checked_repos = result.get("checked", result.get("synced", 0))
         task_run.found_updates = result.get("updates", result.get("new", 0))
         db.commit()
+
+        return result
 
     except Exception as e:
         logger.exception(f"Task '{task_name}' failed: {e}")
         if task_run:
             task_run.status = "failed"
-            task_run.finished_at = datetime.now(timezone.utc)
+            task_run.finished_at = datetime.now(UTC)
             task_run.message = str(e)[:500]
             db.commit()
+        return {"error": True, "message": str(e)[:500]}
     finally:
         _running_tasks[task_name] = False
         db.close()

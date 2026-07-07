@@ -1,23 +1,34 @@
 """Settings management service."""
 
-from typing import Optional, Any
+import contextlib
+import re
+from typing import Any
+
 from sqlalchemy.orm import Session
+
+from app.crypto import decrypt, encrypt
 from app.models import Setting
 
 
 def get_setting(db: Session, key: str, default: Any = "") -> Any:
-    """Get a setting value by key."""
+    """Get a setting value by key. Decrypts secret values transparently."""
     setting = db.query(Setting).filter(Setting.key == key).first()
     if setting is None:
         return default
-    return setting.value
+    value = setting.value
+    if setting.secret:
+        with contextlib.suppress(Exception):
+            value = decrypt(value)
+    return value
 
 
 def set_setting(db: Session, key: str, value: str, secret: bool = False):
-    """Set a setting value. If empty string, delete the setting."""
+    """Set a setting value. Encrypts when secret=True. Empty string deletes."""
     if value == "":
         db.query(Setting).filter(Setting.key == key).delete()
         return
+    if secret:
+        value = encrypt(value)
     setting = db.query(Setting).filter(Setting.key == key).first()
     if setting:
         setting.value = value
@@ -36,18 +47,6 @@ def is_secret_set(db: Session, key: str) -> bool:
     return bool(setting.value)
 
 
-def get_all_settings(db: Session) -> dict:
-    """Get all non-secret settings as a dict."""
-    settings = db.query(Setting).all()
-    result = {}
-    for s in settings:
-        if s.secret:
-            result[s.key] = "***SET***" if s.value else ""
-        else:
-            result[s.key] = s.value
-    return result
-
-
 def validate_port(port_str: str) -> bool:
     """Validate SMTP port."""
     try:
@@ -61,12 +60,7 @@ def validate_github_username(username: str) -> bool:
     """Validate GitHub username - alphanumeric, hyphens, max 39 chars."""
     if not username or len(username) > 39:
         return False
-    import re
     return bool(re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$', username))
 
 
-def validate_interval_minutes(minutes: int) -> bool:
-    """Validate check interval - minimum 15 minutes."""
-    if not isinstance(minutes, int) or minutes < 15:
-        return False
-    return True
+

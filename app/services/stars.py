@@ -1,21 +1,20 @@
 """GitHub stars synchronization service."""
 
-import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import Repo, RepoState, Setting
 from app.github_client import GitHubClient
+from app.models import Repo, RepoState
 from app.services.logs import add_log
+from app.utils import parse_dt
 
 logger = logging.getLogger(__name__)
 
 
-async def sync_stars(username: str, token: str, delay: float = 0.2, db: Optional[Session] = None) -> dict:
+async def sync_stars(username: str, token: str, delay: float = 0.2, db: Session | None = None) -> dict:
     """Sync starred repositories from GitHub."""
     should_close = db is None
     if db is None:
@@ -28,7 +27,7 @@ async def sync_stars(username: str, token: str, delay: float = 0.2, db: Optional
         synced = 0
         new_repos = 0
         unstarred = 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Track which full_names we see from API
         seen_full_names = set()
@@ -40,8 +39,8 @@ async def sync_stars(username: str, token: str, delay: float = 0.2, db: Optional
             seen_full_names.add(full_name)
 
             # Parse fields
-            pushed_at = _parse_dt(repo_data.get("pushed_at"))
-            starred_at = _parse_dt(repo_data.get("starred_at"))
+            pushed_at = parse_dt(repo_data.get("pushed_at"))
+            starred_at = parse_dt(repo_data.get("starred_at"))
 
             # Check if repo exists
             existing = db.query(Repo).filter(Repo.full_name == full_name).first()
@@ -131,14 +130,3 @@ async def sync_stars(username: str, token: str, delay: float = 0.2, db: Optional
             db.close()
 
 
-def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
-    """Parse an ISO datetime string to timezone-aware datetime."""
-    if not dt_str:
-        return None
-    try:
-        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except (ValueError, TypeError):
-        return None

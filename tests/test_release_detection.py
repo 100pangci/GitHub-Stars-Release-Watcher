@@ -1,10 +1,6 @@
 """Tests for release detection logic."""
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.releases import _parse_dt, _check_single_repo
-from app.models import Repo, RepoState, Version
+from app.utils import parse_dt
 
 
 class TestReleaseDetection:
@@ -12,7 +8,7 @@ class TestReleaseDetection:
 
     def test_parse_dt_valid(self):
         """Test parsing valid ISO datetime."""
-        result = _parse_dt("2024-01-15T10:30:00Z")
+        result = parse_dt("2024-01-15T10:30:00Z")
         assert result is not None
         assert result.year == 2024
         assert result.month == 1
@@ -21,21 +17,21 @@ class TestReleaseDetection:
 
     def test_parse_dt_no_tz(self):
         """Test parsing datetime without timezone."""
-        result = _parse_dt("2024-01-15T10:30:00")
+        result = parse_dt("2024-01-15T10:30:00")
         assert result is not None
         assert result.tzinfo is not None  # Should be made UTC
 
     def test_parse_dt_none(self):
         """Test parsing None."""
-        result = _parse_dt(None)
+        result = parse_dt(None)
         assert result is None
 
     def test_parse_dt_empty(self):
         """Test parsing empty string."""
-        result = _parse_dt("")
+        result = parse_dt("")
         assert result is None
 
     def test_parse_dt_invalid(self):
         """Test parsing invalid string."""
-        result = _parse_dt("not-a-date")
+        result = parse_dt("not-a-date")
         assert result is None

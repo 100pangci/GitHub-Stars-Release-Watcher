@@ -1,13 +1,12 @@
 """Authentication and security utilities."""
 
-import secrets
 import logging
-from datetime import timedelta, datetime, timezone
-from functools import wraps
-from typing import Optional
+import secrets
+from datetime import UTC, datetime
 
-from fastapi import Request, HTTPException, Response
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from fastapi import HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from app.config import settings
 from app.database import SessionLocal
@@ -19,7 +18,7 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE = "gsrw_session"
 SESSION_MAX_AGE = 7 * 24 * 3600  # 7 days in seconds
 
-_serializer: Optional[URLSafeTimedSerializer] = None
+_serializer: URLSafeTimedSerializer | None = None
 
 
 def get_serializer() -> URLSafeTimedSerializer:
@@ -73,8 +72,28 @@ def is_password_configured() -> bool:
     return bool(get_stored_password_hash())
 
 
+def ensure_session_secret():
+    """Persist the session secret to DB so it survives restarts."""
+    global _serializer
+    db = SessionLocal()
+    try:
+        stored = get_setting(db, "session_secret", "")
+        if stored:
+            settings.session_secret = stored
+            return
+        new_secret = settings.get_session_secret()
+        set_setting(db, "session_secret", new_secret, secret=True)
+        db.commit()
+        settings.session_secret = new_secret
+        _serializer = None
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
 def ensure_password_configured():
-    """Generate initial password if not configured. Returns the plain text password if newly generated."""
+    """Generate initial password if not configured."""
     if is_password_configured():
         return None
 
@@ -83,29 +102,6 @@ def ensure_password_configured():
     hashed = hash_password(plain_password)
     set_stored_password_hash(hashed)
 
-    logger.info("=" * 60)
-    logger.info("INITIAL PASSWORD GENERATED (first run):")
-    logger.info(f"  Password: {plain_password}")
-    logger.info("=" * 60)
-
-    # Also store in app_logs table for the Web UI logs page
-    from app.models import AppLog
-    from datetime import datetime, timezone
-    db = SessionLocal()
-    try:
-        log = AppLog(
-            level="INFO",
-            message="Initial password generated. Check server startup logs for the password.",
-            created_at=datetime.now(timezone.utc),
-        )
-        db.add(log)
-        db.commit()
-    except Exception:
-        db.rollback()
-    finally:
-        db.close()
-
-    # Print to stdout as well since the init happens during app startup
     print("\n" + "=" * 60)
     print("INITIAL PASSWORD GENERATED (first run):")
     print(f"  Password: {plain_password}")
@@ -114,17 +110,25 @@ def ensure_password_configured():
     return None  # Never return the plain password from this function on subsequent calls
 
 
-def create_session(response: Response) -> str:
-    """Create a new session and set the cookie."""
+def create_session(response: Response, secure: bool | None = None) -> str:
+    """Create a new session and set the cookie.
+
+    Args:
+        response: The response to set the cookie on.
+        secure: Whether the cookie should have the Secure flag.
+                If None, uses settings.app_cookie_secure.
+    """
     serializer = get_serializer()
-    token = serializer.dumps({"created": datetime.now(timezone.utc).timestamp()})
+    token = serializer.dumps({"created": datetime.now(UTC).timestamp()})
+    if secure is None:
+        secure = settings.app_cookie_secure
     response.set_cookie(
         key=SESSION_COOKIE,
         value=token,
         max_age=SESSION_MAX_AGE,
         httponly=True,
         samesite="lax",
-        secure=settings.app_cookie_secure,
+        secure=secure,
         path="/",
     )
     return token
@@ -159,13 +163,9 @@ class LoginRequired:
 
     async def __call__(self, request: Request):
         if not validate_session(request):
-            # For HTMX or API requests, return 401
-            if request.headers.get("HX-Request") or request.url.path.startswith("/api/"):
+            if request.url.path.startswith("/api/"):
                 raise HTTPException(status_code=401, detail="Unauthorized")
-            # For regular page requests, redirect to login
-            from fastapi.responses import RedirectResponse
-            response = RedirectResponse(url="/login", status_code=303)
-            raise HTTPException(status_code=303, detail="Redirecting to login", headers={"Location": "/login"})
+            return RedirectResponse(url="/login", status_code=303)
 
 
 login_required = LoginRequired()

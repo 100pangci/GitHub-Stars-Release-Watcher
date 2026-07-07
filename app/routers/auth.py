@@ -1,31 +1,38 @@
 """Authentication router - login, logout, change password."""
 
-from fastapi import APIRouter, Request, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
+import time
+
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from app.security import (
-    verify_password,
-    get_stored_password_hash,
-    set_stored_password_hash,
-    hash_password,
     create_session,
     destroy_session,
+    get_stored_password_hash,
+    hash_password,
+    set_stored_password_hash,
     validate_session,
-    is_password_configured,
-    ensure_password_configured,
+    verify_password,
 )
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+
+# In-memory rate limiting for login attempts
+_login_attempts: dict[str, list[float]] = {}
+RATE_LIMIT_WINDOW = 900  # 15 minutes
+RATE_LIMIT_MAX = 5
 
 
-@router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    """Show login page."""
-    if validate_session(request):
-        return RedirectResponse(url="/", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request})
+def _check_rate_limit(ip: str) -> bool:
+    """Return True if request is allowed, False if rate-limited."""
+    now = time.time()
+    attempts = _login_attempts.get(ip, [])
+    attempts = [t for t in attempts if now - t < RATE_LIMIT_WINDOW]
+    if len(attempts) >= RATE_LIMIT_MAX:
+        return False
+    attempts.append(now)
+    _login_attempts[ip] = attempts
+    return True
 
 
 @router.post("/login")
@@ -34,22 +41,27 @@ async def login(
     password: str = Form(...),
 ):
     """Process login."""
-    stored_hash = get_stored_password_hash()
-    if not stored_hash or not verify_password(password, stored_hash):
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "Invalid password"},
+    ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(ip):
+        return JSONResponse(
+            {"success": False, "message": "Too many login attempts. Try again in 15 minutes."},
+            status_code=429,
         )
 
-    response = RedirectResponse(url="/", status_code=303)
-    create_session(response)
+    stored_hash = get_stored_password_hash()
+    if not stored_hash or not verify_password(password, stored_hash):
+        return JSONResponse({"success": False, "message": "Invalid password"}, status_code=401)
+
+    is_https = request.url.scheme == "https"
+    response = JSONResponse({"success": True, "message": "Login successful"})
+    create_session(response, secure=is_https)
     return response
 
 
 @router.post("/logout")
 async def logout():
     """Logout and destroy session."""
-    response = RedirectResponse(url="/login", status_code=303)
+    response = JSONResponse({"success": True, "message": "Logged out"})
     destroy_session(response)
     return response
 
@@ -71,9 +83,9 @@ async def change_password(
             status_code=400,
         )
 
-    if len(new_password) < 4:
+    if len(new_password) < 8:
         return JSONResponse(
-            {"success": False, "message": "New password must be at least 4 characters"},
+            {"success": False, "message": "New password must be at least 8 characters"},
             status_code=400,
         )
 

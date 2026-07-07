@@ -2,8 +2,10 @@
 
 import logging
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy.orm import Session
+
 from app.database import SessionLocal
 from app.models import AppLog
 
@@ -44,7 +46,7 @@ def add_log(level: str, message: str, db: Session = None):
         log = AppLog(
             level=level.upper(),
             message=str(message),
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         db.add(log)
         if should_close:
@@ -71,7 +73,7 @@ def get_recent_logs(db: Session, limit: int = 200) -> list:
 
 def cleanup_old_logs(db: Session, keep_days: int = 30):
     """Delete log entries older than keep_days."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=keep_days)
+    cutoff = datetime.now(UTC) - timedelta(days=keep_days)
     deleted = db.query(AppLog).filter(AppLog.created_at < cutoff).delete()
     if deleted:
         logger.info(f"Cleaned up {deleted} old log entries")

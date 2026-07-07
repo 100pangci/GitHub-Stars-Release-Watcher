@@ -2,21 +2,21 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import Repo, RepoState, Version, Event
 from app.github_client import GitHubClient
+from app.models import Event, Repo, RepoState, Version
 from app.services.logs import add_log
 from app.services.settings import get_setting
+from app.utils import parse_dt
 
 logger = logging.getLogger(__name__)
 
 
-async def check_releases(token: str, delay: float = 0.2, db: Optional[Session] = None) -> dict:
+async def check_releases(token: str, delay: float = 0.2, db: Session | None = None) -> dict:
     """Check all active repos for new releases/tags."""
     should_close = db is None
     if db is None:
@@ -40,7 +40,7 @@ async def check_releases(token: str, delay: float = 0.2, db: Optional[Session] =
         checked = 0
         updated = 0
         errors = 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for repo in repos:
             try:
@@ -106,23 +106,10 @@ async def _check_single_repo(
 
     # Get latest release
     release = None
-    release_source = "release"
 
     if monitor_prereleases:
         releases = await client.get_releases(owner, name, per_page=10)
-        if releases:
-            if monitor_prereleases:
-                # For prerelease mode, just take the first release
-                release = releases[0]
-            else:
-                # Find latest non-prerelease
-                for r in releases:
-                    if not r.get("prerelease", False):
-                        release = r
-                        break
-        if release is None and releases:
-            # Fallback to prerelease if no stable found
-            release = releases[0]
+        release = releases[0] if releases else None
     else:
         release = await client.get_latest_release(owner, name)
 
@@ -134,7 +121,7 @@ async def _check_single_repo(
             "version": tag_name,
             "release_name": release.get("name", "") or tag_name,
             "html_url": release.get("html_url", ""),
-            "published_at": _parse_dt(release.get("published_at")),
+            "published_at": parse_dt(release.get("published_at")),
             "is_prerelease": bool(release.get("prerelease", False)),
         }
 
@@ -147,7 +134,7 @@ async def _check_single_repo(
                 "version": tag.get("name", ""),
                 "release_name": tag.get("name", ""),
                 "html_url": f"{repo.html_url}/releases/tag/{tag.get('name', '')}",
-                "published_at": _parse_dt(tag.get("commit", {}).get("commit", {}).get("author", {}).get("date")),
+                "published_at": parse_dt(tag.get("commit", {}).get("commit", {}).get("author", {}).get("date")),
                 "is_prerelease": False,
             }
 
@@ -211,14 +198,3 @@ async def _check_single_repo(
         return False
 
 
-def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
-    """Parse ISO datetime string."""
-    if not dt_str:
-        return None
-    try:
-        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except (ValueError, TypeError):
-        return None

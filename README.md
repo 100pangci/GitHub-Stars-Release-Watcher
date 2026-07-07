@@ -1,5 +1,7 @@
 # GitHub Stars Release Watcher
 
+[中文文档](./README.zh.md)
+
 A self-hosted application to monitor your GitHub starred repositories for new releases and tags. Get weekly email summaries of all new versions from your starred projects.
 
 ## Features

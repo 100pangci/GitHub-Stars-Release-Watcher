@@ -1,7 +1,6 @@
 """Tests for settings validation logic."""
-import pytest
 
-from app.services.settings import validate_port, validate_github_username, validate_interval_minutes
+from app.services.settings import validate_github_username, validate_interval_minutes, validate_port
 
 
 class TestSettingsValidation:

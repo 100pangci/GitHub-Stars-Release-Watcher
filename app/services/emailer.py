@@ -1,17 +1,16 @@
 """Email sending service using standard library."""
 
+import html
 import logging
 import smtplib
 import ssl
-from email.mime.text import MIMEText
+from datetime import UTC, datetime, timedelta
 from email.mime.multipart import MIMEMultipart
-from typing import Optional
-from datetime import datetime, timezone, timedelta
+from email.mime.text import MIMEText
 
 from sqlalchemy.orm import Session
 
-from app.database import SessionLocal
-from app.models import Repo, Version, Event
+from app.models import Event, Repo
 from app.services.logs import add_log
 from app.services.settings import get_setting
 
@@ -44,7 +43,10 @@ def send_test_email(db: Session) -> str:
         raise ValueError("SMTP not fully configured")
 
     subject = "GitHub Stars Release Watcher - Test Email"
-    body_text = "This is a test email from GitHub Stars Release Watcher.\n\nIf you received this, email configuration is working correctly."
+    body_text = (
+        "This is a test email from GitHub Stars Release Watcher.\n\n"
+        "If you received this, email configuration is working correctly."
+    )
     body_html = """<html><body>
     <h2>Test Email</h2>
     <p>This is a test email from <strong>GitHub Stars Release Watcher</strong>.</p>
@@ -63,7 +65,7 @@ def send_weekly_summary(db: Session) -> dict:
         return {"sent": False, "message": msg}
 
     # Get events not yet included in weekly summary
-    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    week_ago = datetime.now(UTC) - timedelta(days=7)
     events = (
         db.query(Event)
         .filter(
@@ -122,22 +124,24 @@ def send_weekly_summary(db: Session) -> dict:
         # Build HTML body
         body_html_parts = [
             "<html><body>",
-            f"<h2>Weekly Summary</h2>",
+            "<h2>Weekly Summary</h2>",
             f"<p>{total_updates} update{'s' if total_updates != 1 else ''} this week</p>",
             "<hr>",
         ]
         for repo_name, group in sorted(repo_groups.items()):
-            body_html_parts.append(f'<h3><a href="{group["html_url"]}">{repo_name}</a></h3>')
+            safe_url = html.escape(group["html_url"], quote=True)
+            safe_name = html.escape(repo_name)
+            body_html_parts.append(f'<h3><a href="{safe_url}">{safe_name}</a></h3>')
             body_html_parts.append("<ul>")
             for evt in group["updates"]:
-                body_html_parts.append(f"<li>{evt.title}</li>")
+                body_html_parts.append(f"<li>{html.escape(evt.title)}</li>")
             body_html_parts.append("</ul>")
         body_html_parts.append("</body></html>")
         body_html = "\n".join(body_html_parts)
 
     try:
         config = get_smtp_config(db)
-        result = _send_email(config, subject, body_text, body_html)
+        _send_email(config, subject, body_text, body_html)
         msg = f"Weekly summary sent: {total_updates} updates"
         add_log("INFO", msg, db=db)
         logger.info(msg)
@@ -169,18 +173,16 @@ def _send_email(config: dict, subject: str, body_text: str, body_html: str) -> s
     msg.attach(part1)
     msg.attach(part2)
 
+    context = ssl.create_default_context()
     if use_tls:
-        # Use STARTTLS
-        context = ssl.create_default_context()
         with smtplib.SMTP(host, port) as server:
             server.starttls(context=context)
             if username and password:
                 server.login(username, password)
             server.send_message(msg)
     else:
-        # Use SSL/TLS directly or unencrypted
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(host, port, context=context) as server:
+        logger.warning("Sending email without TLS - password will be transmitted in plaintext")
+        with smtplib.SMTP(host, port) as server:
             if username and password:
                 server.login(username, password)
             server.send_message(msg)

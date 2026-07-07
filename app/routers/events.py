@@ -1,36 +1,27 @@
 """Events/Updates router."""
 
-from fastapi import APIRouter, Request, Query
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from app.database import SessionLocal
 from app.models import Event, Repo
 from app.security import validate_session
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 
-@router.get("/events", response_class=HTMLResponse)
-async def events_page(
+@router.get("/api/events")
+async def events_api(
     request: Request,
-    source: str = "all",
     repo_id: str = "",
 ):
-    """Events/Updates page."""
+    """Events/Updates API."""
     if not validate_session(request):
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="/login", status_code=303)
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
     db = SessionLocal()
     try:
         query = db.query(Event)
-
-        if source == "release":
-            query = query.join(Event.version).filter(Event.version.has(source="release"))
-        elif source == "tag":
-            query = query.join(Event.version).filter(Event.version.has(source="tag"))
 
         if repo_id and repo_id.isdigit():
             query = query.filter(Event.repo_id == int(repo_id))
@@ -50,18 +41,6 @@ async def events_page(
                 "repo_url": repo.html_url if repo else "#",
             })
 
-        # Get all repos for filter dropdown
-        repos = db.query(Repo).order_by(Repo.full_name).all()
-
-        return templates.TemplateResponse(
-            "events.html",
-            {
-                "request": request,
-                "events": event_list,
-                "source": source,
-                "repo_id": repo_id,
-                "repos": repos,
-            },
-        )
+        return JSONResponse(event_list)
     finally:
         db.close()

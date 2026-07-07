@@ -1,18 +1,16 @@
 """Dashboard router."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse
 
 from app.database import SessionLocal
-from app.models import Repo, Event, TaskRun, Setting
+from app.models import Event, Repo, TaskRun
 from app.security import validate_session
 from app.services.settings import get_setting
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 
 def get_dashboard_stats():
@@ -24,10 +22,7 @@ def get_dashboard_stats():
         inactive_repos = db.query(Repo).filter(Repo.active == False).count()  # noqa: E712
 
         # Get this week's events
-        week_ago = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        week_ago = week_ago.replace(day=week_ago.day - 7) if week_ago.day > 7 else week_ago
-        from datetime import timedelta
-        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        week_ago = datetime.now(UTC) - timedelta(days=7)
         week_updates = db.query(Event).filter(Event.created_at >= week_ago).count()
 
         # Last check time
@@ -57,20 +52,6 @@ def get_dashboard_stats():
         }
     finally:
         db.close()
-
-
-@router.get("/", response_class=HTMLResponse)
-async def dashboard_page(request: Request):
-    """Dashboard page."""
-    if not validate_session(request):
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="/login", status_code=303)
-
-    stats = get_dashboard_stats()
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {"request": request, "stats": stats},
-    )
 
 
 @router.get("/api/dashboard/stats")

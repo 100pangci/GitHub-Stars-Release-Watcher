@@ -1,10 +1,9 @@
 """Database engine and session management."""
 
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
-
 
 engine = create_engine(
     settings.database_path,
@@ -41,12 +40,12 @@ def get_db():
 def init_db():
     """Create all tables."""
     from app.models import (  # noqa: F401 - ensure models are imported
-        Setting,
-        Repo,
-        Version,
-        RepoState,
-        Event,
-        TaskRun,
         AppLog,
+        Event,
+        Repo,
+        RepoState,
+        Setting,
+        TaskRun,
+        Version,
     )
     Base.metadata.create_all(bind=engine)

@@ -2,8 +2,8 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Optional, Tuple, List, Dict, Any
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 
@@ -22,9 +22,9 @@ class GitHubClient:
         self.delay = delay
         self.rate_limit_remaining: int = 5000
         self.rate_limit_limit: int = 5000
-        self.rate_limit_reset: Optional[datetime] = None
+        self.rate_limit_reset: datetime | None = None
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self) -> dict[str, str]:
         headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -45,18 +45,19 @@ class GitHubClient:
             if limit is not None:
                 self.rate_limit_limit = int(limit)
             if reset is not None:
-                self.rate_limit_reset = datetime.fromtimestamp(int(reset), tz=timezone.utc)
+                self.rate_limit_reset = datetime.fromtimestamp(int(reset), tz=UTC)
         except (ValueError, TypeError):
             pass
 
-    async def _request(self, url: str, params: Optional[Dict] = None) -> httpx.Response:
+    async def _request(self, url: str, params: dict | None = None) -> httpx.Response:
         """Make an HTTP GET request with timeout and rate limit tracking."""
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             response = await client.get(url, headers=self._headers(), params=params)
             self._update_rate_limit(response)
 
             if response.status_code == 403 and self.rate_limit_remaining == 0:
-                reset_time = self.rate_limit_reset.strftime("%Y-%m-%d %H:%M:%S UTC") if self.rate_limit_reset else "unknown"
+                ts = self.rate_limit_reset
+                reset_time = ts.strftime("%Y-%m-%d %H:%M:%S UTC") if ts else "unknown"
                 raise RuntimeError(f"GitHub API rate limit exhausted. Resets at {reset_time}")
             if response.status_code == 401:
                 raise RuntimeError("GitHub API authentication failed. Check your token.")
@@ -68,7 +69,7 @@ class GitHubClient:
             response.raise_for_status()
             return response
 
-    async def get_starred_repos(self, username: str) -> List[Dict[str, Any]]:
+    async def get_starred_repos(self, username: str) -> list[dict[str, Any]]:
         """Get all starred repositories for a user with pagination."""
         repos = []
         page = 1
@@ -98,7 +99,7 @@ class GitHubClient:
         logger.info(f"Fetched {len(repos)} starred repos for user '{username}'")
         return repos
 
-    async def get_starred_repos_with_starred_at(self, username: str) -> List[Tuple[str, Dict]]:
+    async def get_starred_repos_with_starred_at(self, username: str) -> list[tuple[str, dict]]:
         """Get starred repos including starred_at timestamp.
         Returns list of (starred_at, repo_data) tuples.
         """
@@ -134,7 +135,7 @@ class GitHubClient:
         logger.info(f"Fetched {len(results)} starred repos (with starred_at) for '{username}'")
         return results
 
-    async def get_latest_release(self, owner: str, repo: str) -> Optional[Dict]:
+    async def get_latest_release(self, owner: str, repo: str) -> dict | None:
         """Get the latest release for a repository."""
         url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/releases/latest"
         try:
@@ -147,7 +148,7 @@ class GitHubClient:
                 return None
             raise
 
-    async def get_releases(self, owner: str, repo: str, per_page: int = 10) -> List[Dict]:
+    async def get_releases(self, owner: str, repo: str, per_page: int = 10) -> list[dict]:
         """Get recent releases for a repository."""
         url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/releases"
         try:
@@ -160,7 +161,7 @@ class GitHubClient:
                 return []
             raise
 
-    async def get_latest_tag(self, owner: str, repo: str) -> Optional[Dict]:
+    async def get_latest_tag(self, owner: str, repo: str) -> dict | None:
         """Get the latest tag for a repository."""
         url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/tags"
         try:
@@ -174,7 +175,7 @@ class GitHubClient:
                 return None
             raise
 
-    async def check_rate_limit(self) -> Dict[str, Any]:
+    async def check_rate_limit(self) -> dict[str, Any]:
         """Check current rate limit status."""
         url = f"{GITHUB_API_BASE}/rate_limit"
         try:
@@ -185,7 +186,7 @@ class GitHubClient:
                 self.rate_limit_limit = data["resources"]["core"]["limit"]
                 reset_ts = data["resources"]["core"].get("reset", 0)
                 if reset_ts:
-                    self.rate_limit_reset = datetime.fromtimestamp(reset_ts, tz=timezone.utc)
+                    self.rate_limit_reset = datetime.fromtimestamp(reset_ts, tz=UTC)
             return {
                 "remaining": self.rate_limit_remaining,
                 "limit": self.rate_limit_limit,

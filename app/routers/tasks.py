@@ -3,13 +3,25 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.database import SessionLocal
-from app.models import Repo, Setting
 from app.security import validate_session
+from app.services.emailer import is_email_configured, send_test_email
+from app.services.scheduler import run_task
 from app.services.settings import get_setting
-from app.services.scheduler import run_task, sync_stars_job, check_releases_job, weekly_summary_job
-from app.services.emailer import send_test_email, is_email_configured
 
 router = APIRouter()
+
+
+def _task_response(result: dict, default_msg: str) -> JSONResponse:
+    """Build a JSON response from a run_task result dict."""
+    if result.get("skipped"):
+        return JSONResponse({"success": False, "message": result["message"]}, status_code=400)
+    if result.get("error"):
+        return JSONResponse({"success": False, "message": result["message"]}, status_code=500)
+    return JSONResponse({
+        "success": True,
+        "message": result.get("message", default_msg),
+        "data": result,
+    })
 
 
 @router.post("/api/tasks/sync-stars")
@@ -25,15 +37,14 @@ async def trigger_sync_stars(request: Request):
         delay = float(get_setting(db, "github_request_delay", "0.2"))
 
         if not username or not token:
-            return JSONResponse({"success": False, "message": "GitHub username or token not configured"}, status_code=400)
+            return JSONResponse(
+                {"success": False, "message": "GitHub username or token not configured"},
+                status_code=400,
+            )
 
         from app.services.stars import sync_stars as _sync_stars
         result = await run_task("sync_stars", _sync_stars, username=username, token=token, delay=delay)
-        return JSONResponse({
-            "success": True,
-            "message": result.get("message", "Stars synced"),
-            "data": result,
-        })
+        return _task_response(result, "Stars synced")
     except Exception as e:
         return JSONResponse({"success": False, "message": str(e)}, status_code=500)
     finally:
@@ -56,11 +67,7 @@ async def trigger_check_releases(request: Request):
 
         from app.services.releases import check_releases as _check_releases
         result = await run_task("check_releases", _check_releases, token=token, delay=delay)
-        return JSONResponse({
-            "success": True,
-            "message": result.get("message", "Release check completed"),
-            "data": result,
-        })
+        return _task_response(result, "Release check completed")
     except Exception as e:
         return JSONResponse({"success": False, "message": str(e)}, status_code=500)
     finally:

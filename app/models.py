@@ -1,17 +1,15 @@
 """SQLAlchemy ORM models."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import (
-    Column, Integer, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint
-)
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.database import Base
 
 
 def _now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Setting(Base):
@@ -117,6 +115,7 @@ class Event(Base):
     included_in_weekly_summary = Column(Boolean, default=False)
 
     repo = relationship("Repo", back_populates="events")
+    version = relationship("Version", foreign_keys=[version_id])
 
     def __repr__(self):
         return f"<Event {self.event_type}: {self.title}>"

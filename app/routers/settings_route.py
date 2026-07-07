@@ -1,25 +1,22 @@
 """Settings router - note: named settings_route.py to avoid conflict with settings service."""
 
-from fastapi import APIRouter, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, field_validator
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from app.database import SessionLocal
 from app.security import validate_session
-from app.services.settings import get_setting, set_setting, is_secret_set, validate_port, validate_github_username
-from app.services.emailer import send_test_email, is_email_configured
+from app.services.emailer import is_email_configured, send_test_email
 from app.services.scheduler import reload_scheduler
+from app.services.settings import get_setting, is_secret_set, set_setting, validate_github_username, validate_port
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 
-@router.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request):
-    """Settings page."""
+@router.get("/api/settings")
+async def settings_api(request: Request):
+    """Get all settings as JSON."""
     if not validate_session(request):
-        return RedirectResponse(url="/login", status_code=303)
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
     db = SessionLocal()
     try:
@@ -36,7 +33,6 @@ async def settings_page(request: Request):
             "allow_initial_notifications": get_setting(db, "allow_initial_notifications", "false"),
             "github_request_delay": get_setting(db, "github_request_delay", "0.2"),
             "send_no_updates_email": get_setting(db, "send_no_updates_email", "true"),
-            # SMTP - never expose password value
             "smtp_host": get_setting(db, "smtp_host", ""),
             "smtp_port": get_setting(db, "smtp_port", "587"),
             "smtp_username": get_setting(db, "smtp_username", ""),
@@ -46,10 +42,7 @@ async def settings_page(request: Request):
             "smtp_to_addr": get_setting(db, "smtp_to_addr", ""),
             "email_configured": is_email_configured(db),
         }
-        return templates.TemplateResponse(
-            "settings.html",
-            {"request": request, "settings_data": settings_data},
-        )
+        return JSONResponse(settings_data)
     finally:
         db.close()
 
@@ -65,9 +58,8 @@ async def save_github_settings(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     errors = []
-    if github_username:
-        if not validate_github_username(github_username):
-            errors.append("Invalid GitHub username format")
+    if github_username and not validate_github_username(github_username):
+        errors.append("Invalid GitHub username format")
 
     if errors:
         return JSONResponse({"success": False, "message": "; ".join(errors)}, status_code=400)
@@ -140,6 +132,7 @@ async def save_release_policy(
     fallback_to_tags: str = Form("true"),
     ignore_archived: str = Form("true"),
     allow_initial_notifications: str = Form("false"),
+    send_no_updates_email: str = Form("true"),
     github_request_delay: str = Form("0.2"),
 ):
     """Save release/tag policy settings."""
@@ -159,8 +152,8 @@ async def save_release_policy(
         set_setting(db, "fallback_to_tags", fallback_to_tags)
         set_setting(db, "ignore_archived", ignore_archived)
         set_setting(db, "allow_initial_notifications", allow_initial_notifications)
+        set_setting(db, "send_no_updates_email", send_no_updates_email)
         set_setting(db, "github_request_delay", github_request_delay)
-        set_setting(db, "send_no_updates_email", "true")
         db.commit()
         return JSONResponse({"success": True, "message": "Release/Tag policy saved"})
     except Exception as e:

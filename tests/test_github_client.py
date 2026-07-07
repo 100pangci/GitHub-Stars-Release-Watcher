@@ -1,6 +1,6 @@
 """Tests for GitHub API client."""
+
 import pytest
-from datetime import datetime, timezone
 
 from app.github_client import GitHubClient
 
