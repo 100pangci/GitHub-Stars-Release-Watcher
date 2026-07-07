@@ -15,7 +15,7 @@ DEFAULT_TIMEOUT = 30.0
 
 
 class GitHubClient:
-    """Client for GitHub REST API with rate limit tracking."""
+    """Client for GitHub REST API with rate limit tracking and global throttling."""
 
     def __init__(self, token: str, delay: float = 0.2):
         self.token = token
@@ -23,6 +23,17 @@ class GitHubClient:
         self.rate_limit_remaining: int = 5000
         self.rate_limit_limit: int = 5000
         self.rate_limit_reset: datetime | None = None
+        self._last_request_time: float = 0.0
+        self._lock = asyncio.Lock()
+
+    async def _throttle(self):
+        """Ensure minimum delay between consecutive API requests."""
+        async with self._lock:
+            now = asyncio.get_event_loop().time()
+            elapsed = now - self._last_request_time
+            if elapsed < self.delay:
+                await asyncio.sleep(self.delay - elapsed)
+            self._last_request_time = asyncio.get_event_loop().time()
 
     def _headers(self) -> dict[str, str]:
         headers = {
@@ -50,7 +61,8 @@ class GitHubClient:
             pass
 
     async def _request(self, url: str, params: dict | None = None) -> httpx.Response:
-        """Make an HTTP GET request with timeout and rate limit tracking."""
+        """Make an HTTP GET request with timeout, throttling, and rate limit tracking."""
+        await self._throttle()
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             response = await client.get(url, headers=self._headers(), params=params)
             self._update_rate_limit(response)
