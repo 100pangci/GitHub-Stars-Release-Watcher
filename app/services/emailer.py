@@ -7,7 +7,6 @@ the ``app.services.notifier_manager.manager`` singleton directly.
 import logging
 import warnings
 
-from app.database import SessionLocal
 from app.services.notifiers.email import EmailNotifier
 
 logger = logging.getLogger(__name__)

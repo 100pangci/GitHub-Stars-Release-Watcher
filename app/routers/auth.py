@@ -11,7 +11,6 @@ from app.database import SessionLocal
 from app.security import (
     create_session,
     destroy_session,
-    get_serializer,
     get_stored_password_hash,
     hash_password,
     set_stored_password_hash,

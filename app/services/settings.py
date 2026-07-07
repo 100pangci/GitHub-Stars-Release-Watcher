@@ -1,6 +1,5 @@
 """Settings management service."""
 
-import contextlib
 import logging
 import re
 from typing import Any

@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.models import Event, Repo
 from app.services.logs import add_log
 from app.services.notifiers.base import BaseNotifier
-from app.services.settings import get_setting, set_setting, validate_port
+from app.services.settings import get_setting, set_setting
 
 logger = logging.getLogger(__name__)
 

@@ -16,11 +16,11 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from app.models import Event
-from app.services.settings import get_setting
 from app.services.logs import add_log
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
     from app.services.notifiers.base import BaseNotifier
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ class NotifierManager:
     """Singleton registry that holds all available notifier *classes*."""
 
     def __init__(self):
-        self._classes: dict[str, type["BaseNotifier"]] = {}
+        self._classes: dict[str, type[BaseNotifier]] = {}
 
     # ------------------------------------------------------------------
     # Registration
