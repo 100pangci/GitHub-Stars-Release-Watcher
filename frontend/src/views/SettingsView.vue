@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { computed, ref, onMounted } from "vue";
 import { api } from "../api";
+import { t } from "../locales";
 
 interface Settings {
   github_username: string;
@@ -9,6 +10,7 @@ interface Settings {
   check_weekday: string;
   check_time: string;
   custom_interval_minutes: string;
+  check_monthday: string;
   monitor_prereleases: string;
   fallback_to_tags: string;
   ignore_archived: string;
@@ -35,6 +37,24 @@ const smtpPassword = ref("");
 const currentPassword = ref("");
 const newPassword = ref("");
 
+const scheduleOptions = computed(() => [
+  { title: t("settings.schedule.options.hourly"), value: "hourly" },
+  { title: t("settings.schedule.options.daily"), value: "daily" },
+  { title: t("settings.schedule.options.weekly"), value: "weekly" },
+  { title: t("settings.schedule.options.monthly"), value: "monthly" },
+  { title: t("settings.schedule.options.custom"), value: "custom" },
+]);
+
+const weekdayOptions = computed(() => [
+  { title: t("settings.schedule.weekdays.mon"), value: "mon" },
+  { title: t("settings.schedule.weekdays.tue"), value: "tue" },
+  { title: t("settings.schedule.weekdays.wed"), value: "wed" },
+  { title: t("settings.schedule.weekdays.thu"), value: "thu" },
+  { title: t("settings.schedule.weekdays.fri"), value: "fri" },
+  { title: t("settings.schedule.weekdays.sat"), value: "sat" },
+  { title: t("settings.schedule.weekdays.sun"), value: "sun" },
+]);
+
 onMounted(async () => {
   try {
     settings.value = await api.getSettings();
@@ -56,12 +76,12 @@ async function saveGithub() {
     if (res.success) {
       githubToken.value = "";
       settings.value!.github_token_set = true;
-      showMsg("GitHub settings saved", "success");
+      showMsg(t("settings.saveSuccess"), "success");
     } else {
       showMsg(res.message, "error");
     }
-  } catch (e) {
-    showMsg(e instanceof Error ? e.message : "Failed to save", "error");
+  } catch {
+    showMsg(t("settings.saveError"), "error");
   }
 }
 
@@ -72,12 +92,13 @@ async function saveSchedule() {
     check_weekday: settings.value.check_weekday,
     check_time: settings.value.check_time,
     custom_interval_minutes: settings.value.custom_interval_minutes,
+    check_monthday: settings.value.check_monthday || "1",
   };
   try {
     const res = await api.saveSetting("/api/settings/schedule", data);
-    showMsg(res.success ? "Schedule saved" : res.message, res.success ? "success" : "error");
-  } catch (e) {
-    showMsg(e instanceof Error ? e.message : "Failed to save", "error");
+    showMsg(res.success ? t("settings.saveSuccess") : res.message, res.success ? "success" : "error");
+  } catch {
+    showMsg(t("settings.saveError"), "error");
   }
 }
 
@@ -92,9 +113,9 @@ async function saveReleasePolicy() {
       send_no_updates_email: settings.value.send_no_updates_email,
       github_request_delay: settings.value.github_request_delay,
     });
-    showMsg(res.success ? "Release policy saved" : res.message, res.success ? "success" : "error");
-  } catch (e) {
-    showMsg(e instanceof Error ? e.message : "Failed to save", "error");
+    showMsg(res.success ? t("settings.saveSuccess") : res.message, res.success ? "success" : "error");
+  } catch {
+    showMsg(t("settings.saveError"), "error");
   }
 }
 
@@ -114,12 +135,12 @@ async function saveEmail() {
     if (res.success) {
       smtpPassword.value = "";
       settings.value!.smtp_password_set = true;
-      showMsg("Email settings saved", "success");
+      showMsg(t("settings.saveSuccess"), "success");
     } else {
       showMsg(res.message, "error");
     }
-  } catch (e) {
-    showMsg(e instanceof Error ? e.message : "Failed to save", "error");
+  } catch {
+    showMsg(t("settings.saveError"), "error");
   }
 }
 
@@ -127,18 +148,18 @@ async function testEmail() {
   try {
     const res = await api.testEmail();
     showMsg(res.message, res.success ? "success" : "error");
-  } catch (e) {
-    showMsg(e instanceof Error ? e.message : "Test failed", "error");
+  } catch {
+    showMsg(t("settings.saveError"), "error");
   }
 }
 
 async function changePassword() {
   if (!currentPassword.value || !newPassword.value) {
-    showMsg("Fill in both password fields", "error");
+    showMsg(t("settings.password.empty"), "error");
     return;
   }
   if (newPassword.value.length < 8) {
-    showMsg("New password must be at least 8 characters", "error");
+    showMsg(t("settings.password.minLength"), "error");
     return;
   }
   try {
@@ -148,169 +169,181 @@ async function changePassword() {
       currentPassword.value = "";
       newPassword.value = "";
     }
-  } catch (e) {
-    showMsg(e instanceof Error ? e.message : "Failed to change password", "error");
+  } catch {
+    showMsg(t("settings.saveError"), "error");
   }
 }
 </script>
 
 <template>
   <div>
-    <div class="page-header">
-      <h2>Settings</h2>
+    <div class="d-flex align-center ga-3 mb-6">
+      <v-avatar size="32" color="primary-container" variant="flat" rounded="lg">
+        <v-icon color="primary" size="20">mdi-cog-outline</v-icon>
+      </v-avatar>
+      <h1 class="text-h6 font-weight-bold">{{ t("settings.title") }}</h1>
     </div>
 
-    <div class="alert" :class="'alert-' + messageType" v-if="message">{{ message }}</div>
+    <v-alert v-if="message" :type="messageType" closable class="mb-4" @click:close="message = ''">
+      {{ message }}
+    </v-alert>
 
-    <div v-if="loading" class="card">Loading...</div>
+    <v-skeleton-loader v-if="loading" type="card, card, card" />
 
     <template v-if="settings">
-      <div class="card settings-section">
-        <h3>GitHub</h3>
-        <div class="form-group">
-          <label>Username</label>
-          <input v-model="settings.github_username" placeholder="GitHub username" />
-        </div>
-        <div class="form-group">
-          <label>Token</label>
-          <input v-model="githubToken" type="password" placeholder="Leave blank to keep current" />
-          <div class="hint" v-if="settings.github_token_set">Token is currently set</div>
-        </div>
-        <button class="btn btn-primary" @click="saveGithub">Save GitHub Settings</button>
-      </div>
+      <!-- GitHub -->
+      <v-card variant="flat" color="surface-container" class="mb-4 rounded-xl">
+        <v-card-item class="pa-4 pb-0">
+          <template #prepend>
+            <v-icon color="on-surface-variant" size="20">mdi-github</v-icon>
+          </template>
+          <v-card-title class="text-body-2 font-weight-bold text-on-surface">{{ t("settings.sections.github") }}</v-card-title>
+        </v-card-item>
+        <v-card-text class="pa-4">
+          <v-row dense>
+            <v-col cols="12" sm="6">
+              <v-text-field v-model="settings.github_username" :label="t('settings.github.username')" />
+            </v-col>
+            <v-col cols="12" sm="6">
+              <v-text-field
+                v-model="githubToken"
+                :label="t('settings.github.token')"
+                type="password"
+                :hint="t('settings.github.tokenGuide')"
+                persistent-hint
+              >
+                <template #append-inner>
+                  <v-chip v-if="settings.github_token_set" color="success" size="x-small" variant="tonal">{{ t("settings.github.tokenSet") }}</v-chip>
+                </template>
+              </v-text-field>
+            </v-col>
+          </v-row>
+          <v-btn color="primary" size="small" class="mt-2" @click="saveGithub">{{ t("settings.github.save") }}</v-btn>
+        </v-card-text>
+      </v-card>
 
-      <div class="card settings-section">
-        <h3>Schedule</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Frequency</label>
-            <select v-model="settings.check_schedule">
-              <option value="weekly">Weekly</option>
-              <option value="daily">Daily</option>
-              <option value="hourly">Hourly</option>
-              <option value="custom">Custom</option>
-            </select>
-          </div>
-          <div class="form-group" v-if="settings.check_schedule === 'weekly'">
-            <label>Weekday</label>
-            <select v-model="settings.check_weekday">
-              <option value="mon">Monday</option>
-              <option value="tue">Tuesday</option>
-              <option value="wed">Wednesday</option>
-              <option value="thu">Thursday</option>
-              <option value="fri">Friday</option>
-              <option value="sat">Saturday</option>
-              <option value="sun">Sunday</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Time</label>
-            <input v-model="settings.check_time" type="time" />
-          </div>
-          <div class="form-group" v-if="settings.check_schedule === 'custom'">
-            <label>Interval (minutes, min 15)</label>
-            <input v-model="settings.custom_interval_minutes" type="number" min="15" />
-          </div>
-        </div>
-        <button class="btn btn-primary" @click="saveSchedule">Save Schedule</button>
-      </div>
+      <!-- Schedule -->
+      <v-card variant="flat" color="surface-container" class="mb-4 rounded-xl">
+        <v-card-item class="pa-4 pb-0">
+          <template #prepend>
+            <v-icon color="on-surface-variant" size="20">mdi-calendar-clock</v-icon>
+          </template>
+          <v-card-title class="text-body-2 font-weight-bold text-on-surface">{{ t("settings.sections.schedule") }}</v-card-title>
+        </v-card-item>
+        <v-card-text class="pa-4">
+          <v-row dense>
+            <v-col cols="12" sm="6" md="3">
+              <v-select v-model="settings.check_schedule" :label="t('settings.schedule.frequency')" :items="scheduleOptions" />
+            </v-col>
+            <v-col cols="12" sm="6" md="3" v-if="settings.check_schedule === 'weekly'">
+              <v-select v-model="settings.check_weekday" :label="t('settings.schedule.weekday')" :items="weekdayOptions" />
+            </v-col>
+            <v-col cols="12" sm="6" md="3" v-if="settings.check_schedule === 'monthly'">
+              <v-text-field v-model="settings.check_monthday" :label="t('settings.schedule.monthday')" type="number" min="1" max="31" />
+            </v-col>
+            <v-col cols="12" sm="6" md="3">
+              <v-text-field v-model="settings.check_time" :label="t('settings.schedule.time')" type="time" />
+            </v-col>
+            <v-col cols="12" sm="6" md="3" v-if="settings.check_schedule === 'custom'">
+              <v-text-field v-model="settings.custom_interval_minutes" :label="t('settings.schedule.interval')" type="number" min="15" />
+            </v-col>
+          </v-row>
+          <v-btn color="primary" size="small" class="mt-1" @click="saveSchedule">{{ t("settings.schedule.save") }}</v-btn>
+        </v-card-text>
+      </v-card>
 
-      <div class="card settings-section">
-        <h3>Release / Tag Policy</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label>
-              <input type="checkbox" true-value="true" false-value="false" v-model="settings.monitor_prereleases" />
-              Monitor pre-releases
-            </label>
-          </div>
-          <div class="form-group">
-            <label>
-              <input type="checkbox" true-value="true" false-value="false" v-model="settings.fallback_to_tags" />
-              Fallback to tags
-            </label>
-          </div>
-          <div class="form-group">
-            <label>
-              <input type="checkbox" true-value="true" false-value="false" v-model="settings.ignore_archived" />
-              Ignore archived repos
-            </label>
-          </div>
-          <div class="form-group">
-            <label>
-              <input type="checkbox" true-value="true" false-value="false" v-model="settings.allow_initial_notifications" />
-              Allow initial notifications
-            </label>
-          </div>
-          <div class="form-group">
-            <label>
-              <input type="checkbox" true-value="true" false-value="false" v-model="settings.send_no_updates_email" />
-              Send "no updates" email
-            </label>
-          </div>
-          <div class="form-group">
-            <label>API request delay (s)</label>
-            <input v-model="settings.github_request_delay" type="number" step="0.1" min="0.01" />
-          </div>
-        </div>
-        <button class="btn btn-primary" @click="saveReleasePolicy">Save Release Policy</button>
-      </div>
+      <!-- Release Policy -->
+      <v-card variant="flat" color="surface-container" class="mb-4 rounded-xl">
+        <v-card-item class="pa-4 pb-0">
+          <template #prepend>
+            <v-icon color="on-surface-variant" size="20">mdi-tune-variant</v-icon>
+          </template>
+          <v-card-title class="text-body-2 font-weight-bold text-on-surface">{{ t("settings.sections.releasePolicy") }}</v-card-title>
+        </v-card-item>
+        <v-card-text class="pa-4">
+          <v-row dense>
+            <v-col cols="6" sm="4" md="3">
+              <v-checkbox v-model="settings.monitor_prereleases" true-value="true" false-value="false" :label="t('settings.releasePolicy.monitorPrereleases')" density="compact" hide-details />
+            </v-col>
+            <v-col cols="6" sm="4" md="3">
+              <v-checkbox v-model="settings.fallback_to_tags" true-value="true" false-value="false" :label="t('settings.releasePolicy.fallbackToTags')" density="compact" hide-details />
+            </v-col>
+            <v-col cols="6" sm="4" md="3">
+              <v-checkbox v-model="settings.ignore_archived" true-value="true" false-value="false" :label="t('settings.releasePolicy.ignoreArchived')" density="compact" hide-details />
+            </v-col>
+            <v-col cols="6" sm="4" md="3">
+              <v-checkbox v-model="settings.allow_initial_notifications" true-value="true" false-value="false" :label="t('settings.releasePolicy.allowInitialNotifications')" density="compact" hide-details />
+            </v-col>
+            <v-col cols="6" sm="4" md="3">
+              <v-checkbox v-model="settings.send_no_updates_email" true-value="true" false-value="false" :label="t('settings.releasePolicy.sendNoUpdatesEmail')" density="compact" hide-details />
+            </v-col>
+            <v-col cols="6" sm="4" md="3">
+              <v-text-field v-model="settings.github_request_delay" :label="t('settings.releasePolicy.apiDelay')" type="number" step="0.1" min="0.01" density="compact" />
+            </v-col>
+          </v-row>
+          <v-btn color="primary" size="small" class="mt-1" @click="saveReleasePolicy">{{ t("settings.releasePolicy.save") }}</v-btn>
+        </v-card-text>
+      </v-card>
 
-      <div class="card settings-section">
-        <h3>Email (SMTP)</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label>SMTP Host</label>
-            <input v-model="settings.smtp_host" placeholder="smtp.example.com" />
+      <!-- Email -->
+      <v-card variant="flat" color="surface-container" class="mb-4 rounded-xl">
+        <v-card-item class="pa-4 pb-0">
+          <template #prepend>
+            <v-icon color="on-surface-variant" size="20">mdi-email-outline</v-icon>
+          </template>
+          <v-card-title class="text-body-2 font-weight-bold text-on-surface">{{ t("settings.sections.email") }}</v-card-title>
+        </v-card-item>
+        <v-card-text class="pa-4">
+          <v-row dense>
+            <v-col cols="12" sm="6" md="4">
+              <v-text-field v-model="settings.smtp_host" :label="t('settings.email.host')" placeholder="smtp.example.com" density="compact" />
+            </v-col>
+            <v-col cols="12" sm="6" md="4">
+              <v-text-field v-model="settings.smtp_port" :label="t('settings.email.port')" type="number" density="compact" />
+            </v-col>
+            <v-col cols="12" sm="6" md="4">
+              <v-text-field v-model="settings.smtp_username" :label="t('settings.email.username')" density="compact" />
+            </v-col>
+            <v-col cols="12" sm="6" md="4">
+              <v-text-field v-model="smtpPassword" :label="t('settings.email.password')" type="password" :hint="settings.smtp_password_set ? t('settings.email.passwordSet') : undefined" persistent-hint density="compact" />
+            </v-col>
+            <v-col cols="6" sm="4" md="4">
+              <v-checkbox v-model="settings.smtp_use_tls" true-value="true" false-value="false" :label="t('settings.email.useTls')" density="compact" hide-details />
+            </v-col>
+            <v-col cols="12" sm="6" md="4">
+              <v-text-field v-model="settings.smtp_from_addr" :label="t('settings.email.fromAddr')" type="email" density="compact" />
+            </v-col>
+            <v-col cols="12" sm="6" md="4">
+              <v-text-field v-model="settings.smtp_to_addr" :label="t('settings.email.toAddr')" type="email" density="compact" />
+            </v-col>
+          </v-row>
+          <div class="d-flex ga-2 mt-1">
+            <v-btn color="primary" size="small" @click="saveEmail">{{ t("settings.email.save") }}</v-btn>
+            <v-btn v-if="settings.email_configured" variant="outlined" size="small" @click="testEmail">{{ t("settings.email.test") }}</v-btn>
           </div>
-          <div class="form-group">
-            <label>SMTP Port</label>
-            <input v-model="settings.smtp_port" type="number" />
-          </div>
-          <div class="form-group">
-            <label>Username</label>
-            <input v-model="settings.smtp_username" />
-          </div>
-          <div class="form-group">
-            <label>Password</label>
-            <input v-model="smtpPassword" type="password" placeholder="Leave blank to keep current" />
-            <div class="hint" v-if="settings.smtp_password_set">Password is currently set</div>
-          </div>
-          <div class="form-group">
-            <label>
-              <input type="checkbox" true-value="true" false-value="false" v-model="settings.smtp_use_tls" />
-              Use TLS
-            </label>
-          </div>
-          <div class="form-group">
-            <label>From address</label>
-            <input v-model="settings.smtp_from_addr" type="email" />
-          </div>
-          <div class="form-group">
-            <label>To address</label>
-            <input v-model="settings.smtp_to_addr" type="email" />
-          </div>
-        </div>
-        <div style="display: flex; gap: 8px">
-          <button class="btn btn-primary" @click="saveEmail">Save Email Settings</button>
-          <button class="btn" @click="testEmail" v-if="settings.email_configured">Send Test Email</button>
-        </div>
-      </div>
+        </v-card-text>
+      </v-card>
 
-      <div class="card settings-section">
-        <h3>Change Password</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Current password</label>
-            <input v-model="currentPassword" type="password" />
-          </div>
-          <div class="form-group">
-            <label>New password (min 8 chars)</label>
-            <input v-model="newPassword" type="password" />
-          </div>
-        </div>
-        <button class="btn btn-primary" @click="changePassword">Change Password</button>
-      </div>
+      <!-- Password -->
+      <v-card variant="flat" color="surface-container" class="rounded-xl">
+        <v-card-item class="pa-4 pb-0">
+          <template #prepend>
+            <v-icon color="on-surface-variant" size="20">mdi-lock-outline</v-icon>
+          </template>
+          <v-card-title class="text-body-2 font-weight-bold text-on-surface">{{ t("settings.sections.password") }}</v-card-title>
+        </v-card-item>
+        <v-card-text class="pa-4">
+          <v-row dense>
+            <v-col cols="12" sm="6">
+              <v-text-field v-model="currentPassword" :label="t('settings.password.current')" type="password" />
+            </v-col>
+            <v-col cols="12" sm="6">
+              <v-text-field v-model="newPassword" :label="t('settings.password.new')" type="password" />
+            </v-col>
+          </v-row>
+          <v-btn color="primary" size="small" class="mt-1" @click="changePassword">{{ t("settings.password.change") }}</v-btn>
+        </v-card-text>
+      </v-card>
     </template>
   </div>
 </template>

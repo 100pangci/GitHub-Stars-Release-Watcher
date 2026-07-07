@@ -11,7 +11,7 @@ services:
     volumes:
       - ./data:/data
     environment:
-      - APP_PASSWORD=${APP_PASSWORD:-change-me}
+      - APP_PASSWORD=${APP_PASSWORD:-}
       - SESSION_SECRET=${SESSION_SECRET:-}
       - APP_COOKIE_SECURE=false
       - GITHUB_USERNAME=${GITHUB_USERNAME:-}

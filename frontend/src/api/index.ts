@@ -5,7 +5,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     ...options,
   });
   const data = await res.json();
-  if (!res.ok && data.error) throw new Error(data.error);
+  if (!res.ok) throw new Error(data.error || data.detail || `Request failed (${res.status})`);
   return data;
 }
 
@@ -96,5 +96,31 @@ export const api = {
     return request<{ success: boolean; message: string }>("/api/settings/test-email", {
       method: "POST",
     });
+  },
+
+  testNotifier(name: string) {
+    return request<{ success: boolean; message: string }>(`/api/settings/notifiers/${name}/test`, {
+      method: "POST",
+    });
+  },
+
+  saveNotifierSettings(name: string, data: Record<string, string>) {
+    return request<{ success: boolean; message: string }>(`/api/settings/notifiers/${name}`, {
+      method: "POST",
+      body: new URLSearchParams(data),
+    });
+  },
+
+  getHistory() {
+    return request<
+      Array<{
+        id: number;
+        task_name: string;
+        status: string;
+        started_at: string;
+        checked_repos: number;
+        found_updates: number;
+      }>
+    >("/api/dashboard/history");
   },
 };

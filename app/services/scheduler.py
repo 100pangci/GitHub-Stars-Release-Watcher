@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -16,10 +16,15 @@ logger = logging.getLogger(__name__)
 
 scheduler: AsyncIOScheduler | None = None
 _running_tasks: dict = {}  # task_name -> bool (lock)
+_retry_tasks: dict = {}  # task_name -> retry_count
+
+
+BACKOFF_DELAYS = [30, 60, 120, 240, 480]  # seconds
+MAX_RETRIES = len(BACKOFF_DELAYS)
 
 
 async def run_task(task_name: str, task_func, **kwargs) -> dict:
-    """Run a background task with concurrency protection and status tracking."""
+    """Run a background task with concurrency protection, status tracking, and auto-retry."""
     if _running_tasks.get(task_name, False):
         logger.warning(f"Task '{task_name}' is already running, skipping")
         db = SessionLocal()
@@ -60,6 +65,9 @@ async def run_task(task_name: str, task_func, **kwargs) -> dict:
         task_run.found_updates = result.get("updates", result.get("new", 0))
         db.commit()
 
+        # Clear retry count on success
+        _retry_tasks.pop(task_name, None)
+
         return result
 
     except Exception as e:
@@ -69,10 +77,29 @@ async def run_task(task_name: str, task_func, **kwargs) -> dict:
             task_run.finished_at = datetime.now(UTC)
             task_run.message = str(e)[:500]
             db.commit()
+
+        # Schedule retry with exponential backoff
+        retry_count = _retry_tasks.get(task_name, 0)
+        if retry_count < MAX_RETRIES:
+            delay = BACKOFF_DELAYS[retry_count]
+            _retry_tasks[task_name] = retry_count + 1
+            asyncio.ensure_future(_schedule_retry(task_name, task_func, delay, **kwargs))
+            logger.info(f"Scheduled retry #{retry_count + 1}/{MAX_RETRIES} for '{task_name}' in {delay}s")
+        else:
+            _retry_tasks.pop(task_name, None)
+            logger.warning(f"Task '{task_name}' exhausted all {MAX_RETRIES} retries")
+
         return {"error": True, "message": str(e)[:500]}
     finally:
         _running_tasks[task_name] = False
         db.close()
+
+
+async def _schedule_retry(task_name: str, task_func, delay: float, **kwargs):
+    """Wait and retry the task with exponential backoff."""
+    logger.info(f"Retrying task '{task_name}' in {delay}s")
+    await asyncio.sleep(delay)
+    await run_task(task_name, task_func, **kwargs)
 
 
 async def sync_stars_job():
@@ -111,11 +138,11 @@ async def check_releases_job():
 
 
 async def weekly_summary_job():
-    """Scheduled job to send weekly summary."""
-    from app.services.emailer import send_weekly_summary
+    """Scheduled job to send weekly summary via all configured notifiers."""
+    from app.services.notifier_manager import manager
     db = SessionLocal()
     try:
-        send_weekly_summary(db)
+        manager.send_all_weekly_summaries(db)
     finally:
         db.close()
 
@@ -133,26 +160,34 @@ async def cleanup_logs_job():
         db.close()
 
 
-def init_scheduler():
-    """Initialize and configure the APScheduler based on settings."""
-    global scheduler
-    if scheduler and scheduler.running:
-        scheduler.shutdown(wait=False)
-
-    scheduler = AsyncIOScheduler(timezone="utc")
-
-    # Read schedule settings
+def _read_schedule_settings():
+    """Read schedule settings from DB."""
     db = SessionLocal()
     try:
-        schedule = get_setting(db, "check_schedule", "weekly")
-        weekday = get_setting(db, "check_weekday", "mon")
-        check_time = get_setting(db, "check_time", "09:00")
-        custom_interval = get_setting(db, "custom_interval_minutes", "60")
+        return {
+            "schedule": get_setting(db, "check_schedule", "weekly"),
+            "weekday": get_setting(db, "check_weekday", "mon"),
+            "check_time": get_setting(db, "check_time", "09:00"),
+            "custom_interval": get_setting(db, "custom_interval_minutes", "60"),
+            "check_monthday": get_setting(db, "check_monthday", "1"),
+        }
     finally:
         db.close()
 
-    # Add stars sync job (less frequently - every 6 hours)
-    scheduler.add_job(
+
+def _configure_scheduler_jobs(sched: AsyncIOScheduler, cfg: dict | None = None):
+    """Add or replace all scheduled jobs on a (possibly running) scheduler."""
+    if cfg is None:
+        cfg = _read_schedule_settings()
+
+    schedule = cfg["schedule"]
+    weekday = cfg["weekday"]
+    check_time = cfg["check_time"]
+    custom_interval = cfg["custom_interval"]
+    check_monthday = cfg["check_monthday"]
+
+    # Stars sync — every 6 hours
+    sched.add_job(
         sync_stars_job,
         IntervalTrigger(hours=6),
         id="sync_stars",
@@ -160,7 +195,7 @@ def init_scheduler():
         replace_existing=True,
     )
 
-    # Add release check job based on schedule
+    # Release check — based on schedule
     if schedule == "hourly":
         trigger = IntervalTrigger(hours=1)
     elif schedule == "daily":
@@ -177,6 +212,15 @@ def init_scheduler():
             trigger = CronTrigger(day_of_week=day, hour=int(hour), minute=int(minute))
         except (ValueError, IndexError):
             trigger = CronTrigger(day_of_week=0, hour=9, minute=0)
+    elif schedule == "monthly":
+        try:
+            hour, minute = check_time.split(":", 1)
+            day = max(1, min(31, int(check_monthday)))
+            if day > 28:
+                logger.warning("Monthly check day %d — will not fire in months with fewer days", day)
+            trigger = CronTrigger(day=day, hour=int(hour), minute=int(minute))
+        except (ValueError, IndexError):
+            trigger = CronTrigger(day=1, hour=9, minute=0)
     elif schedule == "custom":
         try:
             minutes = max(15, int(custom_interval))
@@ -184,10 +228,9 @@ def init_scheduler():
         except (ValueError, TypeError):
             trigger = IntervalTrigger(hours=24)
     else:
-        # Default: weekly on Monday at 09:00
         trigger = CronTrigger(day_of_week=0, hour=9, minute=0)
 
-    scheduler.add_job(
+    sched.add_job(
         check_releases_job,
         trigger,
         id="check_releases",
@@ -195,16 +238,16 @@ def init_scheduler():
         replace_existing=True,
     )
 
-    # Add weekly summary job (always weekly, on configured weekday/time)
+    # Weekly summary — always weekly
     try:
         hour, minute = check_time.split(":", 1)
         weekday_map = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
         day = weekday_map.get(weekday.lower(), 0)
         summary_trigger = CronTrigger(day_of_week=day, hour=int(hour), minute=int(minute))
     except (ValueError, IndexError):
-        summary_trigger = CronTrigger(day_of_week=0, hour=9, minute=30)  # 30 min after check
+        summary_trigger = CronTrigger(day_of_week=0, hour=9, minute=30)
 
-    scheduler.add_job(
+    sched.add_job(
         weekly_summary_job,
         summary_trigger,
         id="weekly_summary",
@@ -212,8 +255,8 @@ def init_scheduler():
         replace_existing=True,
     )
 
-    # Add cleanup job (daily at 03:00)
-    scheduler.add_job(
+    # Cleanup — daily at 03:00
+    sched.add_job(
         cleanup_logs_job,
         CronTrigger(hour=3, minute=0),
         id="cleanup_logs",
@@ -221,16 +264,27 @@ def init_scheduler():
         replace_existing=True,
     )
 
+
+def init_scheduler():
+    """Initialize and configure the APScheduler based on settings."""
+    global scheduler
+    if scheduler and scheduler.running:
+        # Just update jobs without shutting down (avoids interrupting tasks)
+        logger.info("Updating scheduler jobs")
+        _configure_scheduler_jobs(scheduler)
+        return
+
+    scheduler = AsyncIOScheduler(timezone="utc")
+    _configure_scheduler_jobs(scheduler)
     scheduler.start()
     logger.info("Task scheduler initialized")
 
-    # Run initial sync if configured
+    # Run initial sync on first startup only
     db = SessionLocal()
     try:
         username = get_setting(db, "github_username", "")
         token = get_setting(db, "github_token", "")
         if username and token:
-            # Sync stars on startup (fire and forget)
             asyncio.ensure_future(sync_stars_job())
     finally:
         db.close()

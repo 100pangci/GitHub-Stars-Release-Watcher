@@ -5,11 +5,16 @@ from fastapi.responses import JSONResponse
 
 from app.database import SessionLocal
 from app.security import validate_session
-from app.services.emailer import is_email_configured, send_test_email
+from app.services.notifier_manager import manager
 from app.services.scheduler import reload_scheduler
 from app.services.settings import get_setting, is_secret_set, set_setting, validate_github_username, validate_port
 
 router = APIRouter()
+
+
+def _notifier_settings(db) -> dict:
+    """Collect settings from all registered notifiers."""
+    return {n.name: n.get_settings(db) for n in manager.get_all()}
 
 
 @router.get("/api/settings")
@@ -27,6 +32,7 @@ async def settings_api(request: Request):
             "check_weekday": get_setting(db, "check_weekday", "mon"),
             "check_time": get_setting(db, "check_time", "09:00"),
             "custom_interval_minutes": get_setting(db, "custom_interval_minutes", "60"),
+            "check_monthday": get_setting(db, "check_monthday", "1"),
             "monitor_prereleases": get_setting(db, "monitor_prereleases", "false"),
             "fallback_to_tags": get_setting(db, "fallback_to_tags", "true"),
             "ignore_archived": get_setting(db, "ignore_archived", "true"),
@@ -40,7 +46,8 @@ async def settings_api(request: Request):
             "smtp_use_tls": get_setting(db, "smtp_use_tls", "true"),
             "smtp_from_addr": get_setting(db, "smtp_from_addr", ""),
             "smtp_to_addr": get_setting(db, "smtp_to_addr", ""),
-            "email_configured": is_email_configured(db),
+            "email_configured": bool(manager.get("email") and manager.get("email").is_configured(db)),
+            "notifiers": _notifier_settings(db),
         }
         return JSONResponse(settings_data)
     finally:
@@ -85,12 +92,13 @@ async def save_schedule_settings(
     check_weekday: str = Form("mon"),
     check_time: str = Form("09:00"),
     custom_interval_minutes: str = Form("60"),
+    check_monthday: str = Form("1"),
 ):
     """Save schedule settings."""
     if not validate_session(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    valid_schedules = ["hourly", "daily", "weekly", "custom"]
+    valid_schedules = ["hourly", "daily", "weekly", "monthly", "custom"]
     if check_schedule not in valid_schedules:
         return JSONResponse({"success": False, "message": "Invalid schedule"}, status_code=400)
 
@@ -105,9 +113,18 @@ async def save_schedule_settings(
         except ValueError:
             return JSONResponse({"success": False, "message": "Invalid interval"}, status_code=400)
 
-    valid_weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-    if check_weekday.lower() not in valid_weekdays:
-        return JSONResponse({"success": False, "message": "Invalid weekday"}, status_code=400)
+    if check_schedule in ("weekly", "monthly"):
+        if check_schedule == "weekly":
+            valid_weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+            if check_weekday.lower() not in valid_weekdays:
+                return JSONResponse({"success": False, "message": "Invalid weekday"}, status_code=400)
+        else:
+            try:
+                day = int(check_monthday)
+                if day < 1 or day > 31:
+                    return JSONResponse({"success": False, "message": "Month day must be 1-31"}, status_code=400)
+            except ValueError:
+                return JSONResponse({"success": False, "message": "Invalid month day"}, status_code=400)
 
     db = SessionLocal()
     try:
@@ -115,6 +132,7 @@ async def save_schedule_settings(
         set_setting(db, "check_weekday", check_weekday.lower())
         set_setting(db, "check_time", check_time)
         set_setting(db, "custom_interval_minutes", custom_interval_minutes)
+        set_setting(db, "check_monthday", check_monthday)
         db.commit()
         reload_scheduler()
         return JSONResponse({"success": True, "message": "Schedule settings saved"})
@@ -174,7 +192,7 @@ async def save_email_settings(
     smtp_from_addr: str = Form(""),
     smtp_to_addr: str = Form(""),
 ):
-    """Save SMTP/email settings."""
+    """Save SMTP/email settings (backward-compat endpoint)."""
     if not validate_session(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -183,16 +201,23 @@ async def save_email_settings(
 
     db = SessionLocal()
     try:
-        set_setting(db, "smtp_host", smtp_host)
-        set_setting(db, "smtp_port", smtp_port)
-        set_setting(db, "smtp_username", smtp_username)
-        if smtp_password:
-            set_setting(db, "smtp_password", smtp_password, secret=True)
-        set_setting(db, "smtp_use_tls", smtp_use_tls)
-        set_setting(db, "smtp_from_addr", smtp_from_addr)
-        set_setting(db, "smtp_to_addr", smtp_to_addr)
+        notifier = manager.get("email")
+        if not notifier:
+            return JSONResponse({"success": False, "message": "Email notifier not registered"}, status_code=500)
+
+        notifier.save_settings(db, {
+            "smtp_host": smtp_host,
+            "smtp_port": smtp_port,
+            "smtp_username": smtp_username,
+            "smtp_password": smtp_password,
+            "smtp_use_tls": smtp_use_tls,
+            "smtp_from_addr": smtp_from_addr,
+            "smtp_to_addr": smtp_to_addr,
+        })
         db.commit()
         return JSONResponse({"success": True, "message": "Email settings saved"})
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         return JSONResponse({"success": False, "message": str(e)}, status_code=500)
@@ -202,17 +227,73 @@ async def save_email_settings(
 
 @router.post("/api/settings/test-email")
 async def test_email(request: Request):
-    """Send a test email."""
+    """Send a test email (backward-compat endpoint)."""
     if not validate_session(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     db = SessionLocal()
     try:
-        result = send_test_email(db)
-        return JSONResponse({"success": True, "message": result})
+        notifier = manager.get("email")
+        if not notifier:
+            return JSONResponse({"success": False, "message": "Email notifier not registered"}, status_code=500)
+        result = notifier.send_test(db)
+        return JSONResponse(result)
     except ValueError as e:
         return JSONResponse({"success": False, "message": str(e)}, status_code=400)
     except Exception as e:
         return JSONResponse({"success": False, "message": f"Email sending failed: {e}"}, status_code=500)
+    finally:
+        db.close()
+
+
+# ------------------------------------------------------------------
+# Generic notifier endpoints — new notifier types can be managed here
+# ------------------------------------------------------------------
+
+
+@router.post("/api/settings/notifiers/{name}")
+async def save_notifier_settings(
+    request: Request,
+    name: str,
+):
+    """Save settings for a specific notification channel."""
+    if not validate_session(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    notifier = manager.get(name)
+    if not notifier:
+        return JSONResponse({"success": False, "message": f"Unknown notifier '{name}'"}, status_code=404)
+
+    form = await request.form()
+    data = {k: v for k, v in form.items()}
+
+    db = SessionLocal()
+    try:
+        notifier.save_settings(db, data)
+        db.commit()
+        return JSONResponse({"success": True, "message": f"{notifier.display_name} settings saved"})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+    finally:
+        db.close()
+
+
+@router.post("/api/settings/notifiers/{name}/test")
+async def test_notifier(request: Request, name: str):
+    """Send a test notification via the named channel."""
+    if not validate_session(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    notifier = manager.get(name)
+    if not notifier:
+        return JSONResponse({"success": False, "message": f"Unknown notifier '{name}'"}, status_code=404)
+
+    db = SessionLocal()
+    try:
+        result = notifier.send_test(db)
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
     finally:
         db.close()

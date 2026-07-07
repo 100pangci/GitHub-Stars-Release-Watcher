@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 
 from app.database import SessionLocal
 from app.security import validate_session
-from app.services.emailer import is_email_configured, send_test_email
+from app.services.notifier_manager import manager
 from app.services.scheduler import run_task
 from app.services.settings import get_setting
 
@@ -76,20 +76,50 @@ async def trigger_check_releases(request: Request):
 
 @router.post("/api/tasks/weekly-summary")
 async def trigger_weekly_summary(request: Request):
-    """Manually trigger weekly summary."""
+    """Manually trigger weekly summary via all configured notifiers."""
     if not validate_session(request):
         return JSONResponse({"success": False, "message": "Unauthorized"}, status_code=401)
 
     db = SessionLocal()
     try:
-        if not is_email_configured(db):
-            return JSONResponse({"success": False, "message": "Email not configured"}, status_code=400)
-
-        from app.services.emailer import send_weekly_summary
-        result = send_weekly_summary(db)
+        results = manager.send_all_weekly_summaries(db)
+        if not results:
+            return JSONResponse(
+                {"success": False, "message": "No notification channels configured"},
+                status_code=400,
+            )
+        any_sent = any(r.get("sent") for r in results.values())
         return JSONResponse({
-            "success": result["sent"],
-            "message": result.get("message", "Summary sent"),
+            "success": any_sent,
+            "message": "Summary sent" if any_sent else "All channels failed",
+            "data": results,
+        })
+    except Exception as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+    finally:
+        db.close()
+
+
+@router.post("/api/tasks/notifiers/{name}/weekly-summary")
+async def trigger_notifier_weekly_summary(request: Request, name: str):
+    """Manually trigger weekly summary via a specific notifier."""
+    if not validate_session(request):
+        return JSONResponse({"success": False, "message": "Unauthorized"}, status_code=401)
+
+    db = SessionLocal()
+    try:
+        notifier = manager.get(name)
+        if not notifier:
+            return JSONResponse({"success": False, "message": f"Unknown notifier '{name}'"}, status_code=404)
+        if not notifier.is_configured(db):
+            return JSONResponse(
+                {"success": False, "message": f"Notifier '{name}' is not configured"},
+                status_code=400,
+            )
+        result = notifier.send_weekly_summary(db)
+        return JSONResponse({
+            "success": result.get("sent", False),
+            "message": result.get("message", ""),
             "data": result,
         })
     except Exception as e:
@@ -100,16 +130,17 @@ async def trigger_weekly_summary(request: Request):
 
 @router.post("/api/tasks/send-test-email")
 async def trigger_test_email(request: Request):
-    """Send test email."""
+    """Send test email (backward-compat — delegates to email notifier)."""
     if not validate_session(request):
         return JSONResponse({"success": False, "message": "Unauthorized"}, status_code=401)
 
     db = SessionLocal()
     try:
-        result = send_test_email(db)
-        return JSONResponse({"success": True, "message": result})
-    except ValueError as e:
-        return JSONResponse({"success": False, "message": str(e)}, status_code=400)
+        notifier = manager.get("email")
+        if not notifier:
+            return JSONResponse({"success": False, "message": "Email notifier not registered"}, status_code=500)
+        result = notifier.send_test(db)
+        return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"success": False, "message": f"Email sending failed: {e}"}, status_code=500)
     finally:

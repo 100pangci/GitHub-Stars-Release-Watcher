@@ -1,0 +1,17 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+.env
+.venv
+venv
+node_modules
+frontend/node_modules
+frontend/src
+frontend/public
+temp
+tests
+*.md
+.DS_Store
+Thumbs.db

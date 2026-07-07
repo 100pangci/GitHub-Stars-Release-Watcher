@@ -63,10 +63,9 @@ async def check_releases(token: str, delay: float = 0.2, db: Session | None = No
                 errors += 1
                 await asyncio.sleep(delay)
 
-        db.commit()
-
         message = f"Checked {checked} repos: {updated} updates, {errors} errors"
         add_log("INFO", message, db=db)
+        db.commit()
         logger.info(message)
 
         return {

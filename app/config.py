@@ -45,7 +45,8 @@ class AppSettings(BaseSettings):
         """Return session secret, generating one if needed."""
         if self.session_secret:
             return self.session_secret
-        return secrets.token_hex(32)
+        self.session_secret = secrets.token_hex(32)
+        return self.session_secret
 
     model_config = {"env_prefix": "", "case_sensitive": False, "env_file": ".env", "env_file_encoding": "utf-8"}
 

@@ -6,13 +6,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from app.crypto import migrate_secrets_from_db
 from app.database import init_db
 from app.security import ensure_password_configured, ensure_session_secret
 from app.services.logs import setup_logging
+from app.services.notifier_manager import manager
+from app.services.notifiers.email import EmailNotifier
 from app.services.scheduler import init_scheduler
 
 # Setup logging
@@ -28,12 +29,15 @@ async def lifespan(app: FastAPI):
     # Initialize database
     init_db()
 
-    # Ensure password and session secret are configured
-    ensure_password_configured()
+    # Ensure session secret first — password encryption depends on it
     ensure_session_secret()
+    ensure_password_configured()
 
     # Encrypt any existing plaintext secrets
     migrate_secrets_from_db()
+
+    # Register notification channels
+    manager.register(EmailNotifier)
 
     # Initialize scheduler
     init_scheduler()
@@ -55,20 +59,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Mount SPA static files
-SPA_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-if SPA_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=str(SPA_DIR), html=True), name="spa")
-else:
-    # Fallback: serve index.html via catch-all route for development
-    @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
-    async def spa_fallback(full_path: str):
-        if full_path.startswith("api/"):
-            return JSONResponse({"detail": "Not found"}, status_code=404)
-        spa_index = SPA_DIR / "index.html"
-        if spa_index.exists():
-            return HTMLResponse(content=spa_index.read_text())
-        return HTMLResponse(content="<h1>Frontend not built</h1><p>Run: cd frontend && npm run build</p>")
 
 # Import and register routers
 from app.routers import auth, dashboard, events, health, repos, settings_route, tasks  # noqa: E402
@@ -81,12 +71,37 @@ app.include_router(events.router)
 app.include_router(settings_route.router)
 app.include_router(tasks.router)
 
+# Serve SPA — serve actual files, fall back to index.html for client-side routing
+SPA_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+@app.get("/", include_in_schema=False)
+async def serve_index():
+    index_path = SPA_DIR / "index.html"
+    if index_path.exists():
+        return HTMLResponse(content=index_path.read_text())
+    return HTMLResponse(content="<h1>Frontend not built</h1><p>cd frontend && npm run build</p>")
+
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
-    """Add security headers and CSRF protection."""
-    # CSRF protection for state-changing requests
-    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+    """Serve SPA routes, add security headers, and protect API routes with CSRF."""
+    path = request.url.path
+
+    # --- SPA fallback (GET/HEAD only — POST and friends must reach FastAPI routes) ---
+    # API routes and health check must reach FastAPI; everything else is the SPA.
+    if request.method in ("GET", "HEAD") and not path.startswith("/api/") and path != "/health":
+        file_path = SPA_DIR / path.lstrip("/")
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        index_path = SPA_DIR / "index.html"
+        if index_path.exists():
+            return HTMLResponse(content=index_path.read_text())
+        return HTMLResponse(content="<h1>Frontend not built</h1><p>cd frontend && npm run build</p>")
+
+    # --- CSRF protection for state-changing API requests ---
+    # /login and /logout are exempt (no session yet / safe)
+    if request.method in ("POST", "PUT", "DELETE", "PATCH") and path not in ("/login", "/logout"):
         origin = request.headers.get("Origin")
         referer = request.headers.get("Referer")
         host = request.headers.get("Host")
@@ -107,6 +122,7 @@ async def security_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; manifest-src 'self'"
     return response
 
 

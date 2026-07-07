@@ -61,3 +61,36 @@ async def dashboard_stats_api(request: Request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     stats = get_dashboard_stats()
     return JSONResponse(stats)
+
+
+@router.get("/api/dashboard/history")
+async def dashboard_history_api(request: Request):
+    """Return recent task run history for charts."""
+    if not validate_session(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    db = SessionLocal()
+    try:
+        runs = (
+            db.query(TaskRun)
+            .filter(
+                TaskRun.task_name.in_(["sync_stars", "check_releases"]),
+                TaskRun.finished_at.isnot(None),
+                TaskRun.started_at >= datetime.now(UTC) - timedelta(days=60),
+            )
+            .order_by(TaskRun.started_at.asc())
+            .all()
+        )
+        return JSONResponse([
+            {
+                "id": r.id,
+                "task_name": r.task_name,
+                "status": r.status,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "checked_repos": r.checked_repos,
+                "found_updates": r.found_updates,
+            }
+            for r in runs
+        ])
+    finally:
+        db.close()

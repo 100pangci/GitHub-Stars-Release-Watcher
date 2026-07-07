@@ -1,6 +1,7 @@
 """Settings management service."""
 
 import contextlib
+import logging
 import re
 from typing import Any
 
@@ -8,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.crypto import decrypt, encrypt
 from app.models import Setting
+
+logger = logging.getLogger(__name__)
 
 
 def get_setting(db: Session, key: str, default: Any = "") -> Any:
@@ -17,8 +20,11 @@ def get_setting(db: Session, key: str, default: Any = "") -> Any:
         return default
     value = setting.value
     if setting.secret:
-        with contextlib.suppress(Exception):
+        try:
             value = decrypt(value)
+        except Exception:
+            logger.warning("Failed to decrypt setting '%s' — key may have changed", key)
+            return default
     return value
 
 

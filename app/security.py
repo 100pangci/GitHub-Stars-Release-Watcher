@@ -30,17 +30,23 @@ def get_serializer() -> URLSafeTimedSerializer:
     return _serializer
 
 
+def reset_serializer():
+    """Force the serializer to re-initialize with the current session_secret."""
+    global _serializer
+    _serializer = None
+
+
 def hash_password(password: str) -> str:
-    """Hash a password using passlib bcrypt."""
-    from passlib.hash import bcrypt
-    return bcrypt.hash(password)
+    """Hash a password using bcrypt directly (bypasses passlib compatibility issue)."""
+    import bcrypt as _bcrypt
+    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 
 def verify_password(password: str, hashed: str) -> bool:
     """Verify a password against its hash."""
-    from passlib.hash import bcrypt
+    import bcrypt as _bcrypt
     try:
-        return bcrypt.verify(password, hashed)
+        return _bcrypt.checkpw(password.encode(), hashed.encode())
     except Exception:
         return False
 
@@ -73,18 +79,52 @@ def is_password_configured() -> bool:
 
 
 def ensure_session_secret():
-    """Persist the session secret to DB so it survives restarts."""
+    """Persist the session secret to DB in plaintext so it survives restarts.
+
+    Stored unencrypted on purpose — encrypting a key with itself creates a
+    circular dependency that breaks on every restart.
+
+    When an old encrypted Fernet token (gAAAAA...) is found, we decrypt it
+    using the current in-memory session secret (which auto-generates if
+    unset). Within the same process the decryption succeeds; on restart the
+    old token can't be decrypted by a freshly-generated secret, so a new
+    secret is generated and persisted — this invalidates existing sessions
+    and re-encrypts the password hash on the first affected restart.
+    """
     global _serializer
     db = SessionLocal()
     try:
-        stored = get_setting(db, "session_secret", "")
-        if stored:
-            settings.session_secret = stored
-            return
+        from app.models import Setting
+        row = db.query(Setting).filter(Setting.key == "session_secret").first()
+
+        if row and row.value:
+            if row.value.startswith("gAAAAA"):
+                from app.crypto import decrypt as _crypto_decrypt
+                try:
+                    old_plain = _crypto_decrypt(row.value)
+                    settings.session_secret = old_plain
+                    row.value = old_plain
+                    row.secret = False
+                    db.commit()
+                    logger.info("Migrated old encrypted session_secret to plaintext")
+                    _serializer = None
+                    return
+                except Exception:
+                    pass
+            else:
+                settings.session_secret = row.value
+                return
+
         new_secret = settings.get_session_secret()
-        set_setting(db, "session_secret", new_secret, secret=True)
-        db.commit()
         settings.session_secret = new_secret
+
+        if row:
+            row.value = new_secret
+            row.secret = False
+        else:
+            db.add(Setting(key="session_secret", value=new_secret, secret=False))
+        db.commit()
+        logger.info("Generated new session secret")
         _serializer = None
     except Exception:
         db.rollback()
@@ -93,21 +133,23 @@ def ensure_session_secret():
 
 
 def ensure_password_configured():
-    """Generate initial password if not configured."""
+    """Set initial password if not configured, using env var if provided."""
     if is_password_configured():
         return None
 
-    # Generate a random password
-    plain_password = secrets.token_urlsafe(16)
+    plain_password = settings.app_password or secrets.token_urlsafe(16)
     hashed = hash_password(plain_password)
     set_stored_password_hash(hashed)
 
-    print("\n" + "=" * 60)
-    print("INITIAL PASSWORD GENERATED (first run):")
-    print(f"  Password: {plain_password}")
-    print("=" * 60 + "\n")
+    if settings.app_password:
+        logger.info("Password set from APP_PASSWORD environment variable")
+    else:
+        print("\n" + "=" * 60)
+        print("INITIAL PASSWORD GENERATED (first run):")
+        print(f"  Password: {plain_password}")
+        print("=" * 60 + "\n")
 
-    return None  # Never return the plain password from this function on subsequent calls
+    return None
 
 
 def create_session(response: Response, secure: bool | None = None) -> str:

@@ -1,19 +1,24 @@
 """Authentication router - login, logout, change password."""
 
+import secrets
 import time
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.config import settings
+from app.database import SessionLocal
 from app.security import (
     create_session,
     destroy_session,
+    get_serializer,
     get_stored_password_hash,
     hash_password,
     set_stored_password_hash,
     validate_session,
     verify_password,
 )
+from app.services.settings import set_setting
 
 router = APIRouter()
 
@@ -90,5 +95,19 @@ async def change_password(
         )
 
     set_stored_password_hash(hash_password(new_password))
+
+    # Invalidate all existing sessions by regenerating the session secret
+    db = SessionLocal()
+    try:
+        new_secret = secrets.token_hex(32)
+        settings.session_secret = new_secret
+        set_setting(db, "session_secret", new_secret, secret=False)
+        db.commit()
+        from app.security import reset_serializer
+        reset_serializer()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
     return JSONResponse({"success": True, "message": "Password changed successfully"})

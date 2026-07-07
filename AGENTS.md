@@ -51,3 +51,36 @@ See `app/routers/` for individual endpoints.
 - **Session secret**: Auto-generated + persisted to DB on first start via `ensure_session_secret()` in `security.py`; survives restarts. Override with `SESSION_SECRET` env var.
 - **Encryption key**: Derived from `SESSION_SECRET`; existing encrypted secrets become unreadable if `SESSION_SECRET` changes.
 - **DB session management**: Functions accept optional `db` param; if `None` they create their own session. Callers must commit/close properly.
+
+## Notification framework
+
+### Architecture
+
+```
+app/services/notifiers/
+  base.py       – BaseNotifier ABC (name, display_name, is_configured, get_settings,
+                  save_settings, send_test, send_weekly_summary)
+  email.py      – EmailNotifier (SMTP, extracted from old emailer.py)
+  __init__.py   – public exports
+app/services/notifier_manager.py – NotifierManager singleton registry
+```
+
+- All notifiers inherit from `BaseNotifier` in `app/services/notifiers/base.py`.
+- The manager (`app/services/notifier_manager.py:manager`) is a module-level singleton.
+- Each notifier type is registered in `app/main.py:lifespan` via `manager.register(EmailNotifier)`.
+- The scheduler (`weekly_summary_job`) calls `manager.send_all_weekly_summaries(db)` once,
+  which queries events and dispatches to every configured notifier.
+- Settings API: `GET /api/settings` returns a `notifiers` key with per-notifier settings.
+  Generic endpoints `POST /api/settings/notifiers/{name}` and
+  `POST /api/settings/notifiers/{name}/test` allow managing any registered notifier.
+- Old SMTP-only endpoints (`/api/settings/email`, `/api/settings/test-email`,
+  `/api/tasks/weekly-summary`, `/api/tasks/send-test-email`) are kept for backward compat.
+- `app/services/emailer.py` is now a thin wrapper delegating to `EmailNotifier`.
+
+### Adding a new notifier
+
+1. Create `app/services/notifiers/my_channel.py` with a class inheriting `BaseNotifier`.
+2. Implement all abstract methods (`name`, `display_name`, `is_configured`, `get_settings`,
+   `save_settings`). Override `send_test` and `send_weekly_summary`.
+3. Register in `app/main.py:lifespan`: `manager.register(MyNotifier)`.
+4. The settings API and scheduler automatically pick up the new notifier.

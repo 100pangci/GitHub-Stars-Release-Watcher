@@ -24,8 +24,19 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system -e ".[dev]"
 
-      - name: Lint
+      - name: Lint (Python)
         run: ruff check .
 
-      - name: Test
+      - name: Test (Python)
         run: pytest -v
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
