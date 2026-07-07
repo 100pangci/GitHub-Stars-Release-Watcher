@@ -5,6 +5,10 @@ __pycache__/
 venv/
 .env
 *.db
+*.db-shm
+*.db-wal
 data/
 frontend/dist/
 frontend/node_modules/
+temp/
+_debug*.py
