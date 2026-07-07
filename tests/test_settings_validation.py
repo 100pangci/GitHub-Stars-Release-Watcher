@@ -1,6 +1,6 @@
 """Tests for settings validation logic."""
 
-from app.services.settings import validate_github_username, validate_interval_minutes, validate_port
+from app.services.settings import validate_github_username, validate_port
 
 
 class TestSettingsValidation:
@@ -38,15 +38,4 @@ class TestSettingsValidation:
         # Name too long (over 39 chars)
         assert validate_github_username("a" * 40) is False
 
-    def test_validate_interval_valid(self):
-        """Test valid custom intervals."""
-        assert validate_interval_minutes(15) is True
-        assert validate_interval_minutes(60) is True
-        assert validate_interval_minutes(1440) is True
 
-    def test_validate_interval_invalid(self):
-        """Test invalid interval values."""
-        assert validate_interval_minutes(5) is False
-        assert validate_interval_minutes(0) is False
-        assert validate_interval_minutes(-10) is False
-        assert validate_interval_minutes("abc") is False

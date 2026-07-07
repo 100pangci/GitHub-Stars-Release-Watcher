@@ -99,42 +99,6 @@ class GitHubClient:
         logger.info(f"Fetched {len(repos)} starred repos for user '{username}'")
         return repos
 
-    async def get_starred_repos_with_starred_at(self, username: str) -> list[tuple[str, dict]]:
-        """Get starred repos including starred_at timestamp.
-        Returns list of (starred_at, repo_data) tuples.
-        """
-        results = []
-        page = 1
-
-        while True:
-            url = f"{GITHUB_API_BASE}/users/{username}/starred"
-            response = await self._request(
-                url,
-                params={"per_page": 100, "page": page},
-            )
-
-            if response.status_code == 404:
-                raise RuntimeError(f"GitHub user '{username}' not found")
-
-            data = response.json()
-            if not data:
-                break
-
-            for item in data:
-                starred_at = item.get("starred_at")
-                repo = item.get("repo", item)
-                results.append((starred_at, repo))
-
-            page += 1
-            link_header = response.headers.get("Link", "")
-            if 'rel="next"' not in link_header:
-                break
-
-            await asyncio.sleep(self.delay)
-
-        logger.info(f"Fetched {len(results)} starred repos (with starred_at) for '{username}'")
-        return results
-
     async def get_latest_release(self, owner: str, repo: str) -> dict | None:
         """Get the latest release for a repository."""
         url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/releases/latest"

@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "github-stars-release-watcher"
 version = "1.0.0"
@@ -35,6 +39,9 @@ ignore = ["PLC0415", "PLW0603"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402"]
+
+[tool.setuptools.packages.find]
+include = ["app", "app.*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
